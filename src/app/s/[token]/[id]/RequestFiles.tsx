@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useState, type ChangeEvent, type DragEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import type { RequestFile } from "@/lib/requests";
 
 interface Props {
@@ -10,6 +10,7 @@ interface Props {
   initialFiles: RequestFile[];
   initialError?: string;
   allowDelete?: boolean;
+  loadOnMount?: boolean;
 }
 
 interface UploadSession {
@@ -60,6 +61,7 @@ export function RequestFiles({
   initialFiles,
   initialError,
   allowDelete = true,
+  loadOnMount = false,
 }: Props) {
   const [files, setFiles] = useState<RequestFile[]>(initialFiles);
   const [uploading, setUploading] = useState(false);
@@ -69,8 +71,41 @@ export function RequestFiles({
   const [preview, setPreview] = useState<RequestFile | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [loadingFiles, setLoadingFiles] = useState(loadOnMount);
+  const initialLoad = useRef<AbortController | null>(null);
 
   const endpoint = `/api/requests/${id}/files?token=${encodeURIComponent(token)}`;
+
+  useEffect(() => {
+    if (!loadOnMount) return;
+    const controller = new AbortController();
+    initialLoad.current = controller;
+    let active = true;
+    let timedOut = false;
+    const timer = window.setTimeout(() => { timedOut = true; controller.abort(); }, 15000);
+    async function load() {
+      try {
+        const response = await fetch(endpoint, { cache: "no-store", signal: controller.signal });
+        if (!response.ok) throw await responseError(response, "Не удалось получить список накладных");
+        const body = await response.json() as { files?: RequestFile[] };
+        if (active && !controller.signal.aborted) setFiles(current => mergeFiles(body.files ?? [], current));
+      } catch (err) {
+        if (active && (!controller.signal.aborted || timedOut)) {
+          setError(timedOut ? "Список накладных загружается слишком долго. Вы можете выбрать новые файлы или обновить список." : err instanceof Error ? err.message : "Не удалось получить список накладных");
+        }
+      } finally {
+        window.clearTimeout(timer);
+        if (active) setLoadingFiles(false);
+      }
+    }
+    void load();
+    return () => { active = false; window.clearTimeout(timer); controller.abort(); };
+  }, [endpoint, loadOnMount]);
+
+  function stopInitialLoad() {
+    initialLoad.current?.abort();
+    setLoadingFiles(false);
+  }
 
   function fileUrl(file: RequestFile, variant?: "preview"): string {
     const suffix = variant ? `&variant=${variant}` : "";
@@ -154,6 +189,7 @@ export function RequestFiles({
 
   async function uploadMany(selected: File[]) {
     if (!selected.length) return;
+    stopInitialLoad();
 
     setUploading(true);
     setProgress(0);
@@ -197,6 +233,7 @@ export function RequestFiles({
     if (!allowDelete || deleting) return;
     const confirmed = window.confirm(`Удалить накладную «${file.name}»?`);
     if (!confirmed) return;
+    stopInitialLoad();
 
     setDeleting(file.uuid);
     setError(null);
@@ -215,13 +252,18 @@ export function RequestFiles({
   }
 
   return (
-    <section className="mb-6 rounded-xl border p-4">
+    <section id="request-files" className="mb-6 rounded-xl border p-4">
       <div className="mb-3">
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="font-medium">Накладные и фото</h2>
           <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
             {files.length}
           </span>
+          <button type="button" disabled={loadingFiles || uploading || Boolean(deleting)} className="ml-auto text-xs text-gray-600 underline disabled:opacity-50" onClick={async () => {
+            setLoadingFiles(true); setError(null);
+            try { await refreshFiles(); } catch (err) { setError(err instanceof Error ? err.message : "Не удалось обновить список"); }
+            finally { setLoadingFiles(false); }
+          }}>Обновить список</button>
         </div>
         <p className="mt-0.5 text-xs text-gray-500">
           Одно поле: можно выбрать или перетащить сразу несколько PDF и фото
@@ -229,6 +271,7 @@ export function RequestFiles({
       </div>
 
       <label
+        htmlFor={`waybill-files-${id}`}
         className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-4 py-6 text-center transition ${
           dragOver
             ? "border-gray-900 bg-gray-50"
@@ -244,28 +287,34 @@ export function RequestFiles({
         }}
         onDragLeave={(event) => {
           event.preventDefault();
-          if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+          // Browsers may use Window as relatedTarget when a file leaves the page.
+          // A TypeScript cast does not make it a Node for contains().
+          if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
           setDragOver(false);
         }}
         onDrop={handleDrop}
       >
+        <span className="text-sm font-medium text-gray-800">
+          {uploading ? `Загрузка ${progress || 0}%` : "Выберите накладные или перетащите файлы сюда"}
+        </span>
         <input
+          id={`waybill-files-${id}`}
+          name="waybillFiles"
+          aria-label="Выбрать накладные или фотографии"
           type="file"
           multiple
           accept="application/pdf,image/*,.heic,.heif"
           disabled={uploading}
           onChange={handleFiles}
-          className="sr-only"
+          className="mt-3 block w-full max-w-md cursor-pointer rounded-lg border p-2 text-sm file:mr-3 file:cursor-pointer file:rounded-md file:border-0 file:bg-gray-100 file:px-4 file:py-2 file:font-medium file:text-gray-900 disabled:cursor-wait"
         />
-        <span className="text-sm font-medium text-gray-800">
-          {uploading ? `Загрузка ${progress || 0}%` : "Нажмите или перетащите файлы сюда"}
-        </span>
         <span className="mt-1 text-xs text-gray-400">
           Несколько накладных за раз, без ограничения по количеству
         </span>
       </label>
 
       <div aria-live="polite">
+        {loadingFiles && <p className="mt-3 text-xs text-gray-500" role="status">Получаем список накладных… Можно уже выбрать новые файлы.</p>}
         {error && (
           <p className="mt-3 rounded-lg bg-red-50 p-2 text-sm text-red-700">{error}</p>
         )}
@@ -348,11 +397,11 @@ export function RequestFiles({
             );
           })}
         </ul>
-      ) : (
+      ) : !loadingFiles ? (
         <p className="mt-3 text-center text-xs text-gray-400">
           После загрузки накладные появятся здесь с превью и кнопкой удаления
         </p>
-      )}
+      ) : null}
 
       {preview && (
         <div

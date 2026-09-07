@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getUserByToken } from "@/lib/auth";
 import { formatDate, formatMoney } from "@/lib/format";
-import { getRequest, listRequestFiles, type RequestFile } from "@/lib/requests";
+import { getRequest } from "@/lib/requests";
 import { RequestFiles } from "@/app/s/[token]/[id]/RequestFiles";
 import { RequestForm } from "@/app/s/[token]/[id]/RequestForm";
 import { DeleteRequest } from "./DeleteRequest";
@@ -25,27 +25,13 @@ export default async function RequestPage({
   const requestId = Number(id);
   if (!Number.isInteger(requestId) || requestId <= 0) notFound();
 
-  const requestPromise = getRequest(requestId, user.name);
-  const filesPromise = listRequestFiles(requestId, { refresh: false }).catch((error) => {
-    console.error("RequestPage: не удалось получить накладные", error);
-    return null;
-  });
-
   let request;
   try {
-    request = await requestPromise;
+    request = await getRequest(requestId, user.name);
   } catch (error) {
     console.error("RequestPage", error);
     notFound();
   }
-
-  const filesOrNull = await filesPromise;
-  const files: RequestFile[] = filesOrNull ?? [];
-  const filesError =
-    filesOrNull === null
-      ? "Не удалось получить накладные. Проверьте доступ к файлам amoCRM."
-      : undefined;
-
   return (
     <main className="request-detail mx-auto max-w-3xl px-4 py-6">
       <Link href={basePath} className="text-sm text-gray-500 hover:underline">
@@ -130,8 +116,8 @@ export default async function RequestPage({
       <RequestFiles
         token={token}
         id={request.id}
-        initialFiles={files}
-        initialError={filesError}
+        initialFiles={[]}
+        loadOnMount
         allowDelete={request.draft.status !== "completing"}
       />
 
