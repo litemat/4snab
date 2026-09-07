@@ -66,6 +66,9 @@ export function RequestFiles({
   const [files, setFiles] = useState<RequestFile[]>(initialFiles);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [uploadDetails, setUploadDetails] = useState({ name: "", index: 0, total: 0 });
+  const [uploadPhase, setUploadPhase] = useState<"preparing" | "sending">("preparing");
+  const uploadLock = useRef(false);
   const [error, setError] = useState<string | null>(initialError ?? null);
   const [notice, setNotice] = useState<string | null>(null);
   const [preview, setPreview] = useState<RequestFile | null>(null);
@@ -129,8 +132,10 @@ export function RequestFiles({
   }
 
   async function uploadOne(file: File): Promise<RequestFile> {
+    setUploadPhase("preparing");
     const sessionResponse = await fetch(endpoint, {
       method: "POST",
+      signal: AbortSignal.timeout(60_000),
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         fileName: file.name,
@@ -154,6 +159,7 @@ export function RequestFiles({
 
     let uploadUrl = session.uploadUrl;
     let offset = 0;
+    setUploadPhase("sending");
     while (offset < file.size) {
       const end = Math.min(offset + session.maxPartSize, file.size);
       const chunk = file.slice(offset, end);
@@ -161,6 +167,7 @@ export function RequestFiles({
         `/api/requests/${id}/files/upload?token=${encodeURIComponent(token)}`,
         {
           method: "POST",
+          signal: AbortSignal.timeout(60_000),
           headers: {
             "Content-Type": "application/octet-stream",
             "x-amo-upload-url": uploadUrl,
@@ -174,7 +181,8 @@ export function RequestFiles({
 
       const result = (await response.json()) as UploadProgress;
       offset = end;
-      setProgress(Math.round((offset / file.size) * 100));
+      // Advance only after the server confirms a chunk; never simulate progress.
+      setProgress(result.complete ? 100 : Math.min(99, Math.floor((offset / file.size) * 100)));
 
       if (result.complete) {
         if (!result.file) throw new Error("amoCRM не вернула загруженный файл");
@@ -188,7 +196,8 @@ export function RequestFiles({
   }
 
   async function uploadMany(selected: File[]) {
-    if (!selected.length) return;
+    if (!selected.length || uploadLock.current) return;
+    uploadLock.current = true;
     stopInitialLoad();
 
     setUploading(true);
@@ -198,20 +207,24 @@ export function RequestFiles({
     let uploadedCount = 0;
     try {
       for (const file of selected) {
+        setUploadDetails({ name: file.name, index: uploadedCount + 1, total: selected.length });
+        setProgress(0);
         const uploaded = await uploadOne(file);
         uploadedCount += 1;
         setFiles((current) => mergeFiles([uploaded], current));
-        setProgress(0);
       }
-      await refreshFiles();
       setNotice(
         uploadedCount === 1
           ? "Накладная загружена и сохранена"
           : `Загружено накладных: ${uploadedCount}`,
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не удалось загрузить накладную");
+      const message = err instanceof Error && err.name === "TimeoutError"
+        ? "Сервер не подтвердил загрузку за 60 секунд. Обновите список перед повторной отправкой: файл мог сохраниться."
+        : err instanceof Error ? err.message : "Не удалось загрузить накладную";
+      setError(uploadedCount ? `Уже сохранено файлов: ${uploadedCount}. ${message}` : message);
     } finally {
+      uploadLock.current = false;
       setUploading(false);
     }
   }
@@ -295,7 +308,7 @@ export function RequestFiles({
         onDrop={handleDrop}
       >
         <span className="text-sm font-medium text-gray-800">
-          {uploading ? `Загрузка ${progress || 0}%` : "Выберите накладные или перетащите файлы сюда"}
+          {uploading ? "Дождитесь завершения загрузки" : "Выберите накладные или перетащите файлы сюда"}
         </span>
         <input
           id={`waybill-files-${id}`}
@@ -312,6 +325,31 @@ export function RequestFiles({
           Несколько накладных за раз, без ограничения по количеству
         </span>
       </label>
+
+      {uploading && (
+        <div className="mt-3 rounded-xl border border-blue-300 bg-blue-50 p-4">
+          <div className="flex items-center gap-3" role="status">
+            <span aria-hidden="true" className="h-6 w-6 shrink-0 animate-spin rounded-full border-2 border-blue-200 border-t-blue-700 motion-reduce:animate-none" />
+            <div className="min-w-0">
+              <p className="font-semibold text-blue-900">
+                {uploadPhase === "preparing" ? "Подготавливаем загрузку…" : "Идёт загрузка файла…"}
+              </p>
+              <p className="break-all text-sm text-blue-900">
+                Файл {uploadDetails.index} из {uploadDetails.total}: {uploadDetails.name}
+              </p>
+            </div>
+          </div>
+          {uploadPhase === "sending" && (
+            <>
+              <div role="progressbar" aria-label="Подтверждено сервером" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} className="mt-3 h-2 overflow-hidden rounded-full bg-blue-200">
+                <div className="h-full rounded-full bg-blue-700 transition-[width] motion-reduce:transition-none" style={{ width: `${progress}%` }} />
+              </div>
+              <p className="mt-2 text-xs text-blue-900">Подтверждено сервером: {progress}%. Отправляем файл и ждём подтверждения сохранения.</p>
+            </>
+          )}
+          <p className="mt-2 text-xs text-blue-900">Не закрывайте страницу до сообщения о сохранении.</p>
+        </div>
+      )}
 
       <div aria-live="polite">
         {loadingFiles && <p className="mt-3 text-xs text-gray-500" role="status">Получаем список накладных… Можно уже выбрать новые файлы.</p>}
