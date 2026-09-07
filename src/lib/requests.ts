@@ -3,7 +3,6 @@ import "server-only";
 import { env, requireId } from "./env";
 import {
   addLeadTag,
-  countLeadsByPipeline,
   createLead,
   findLeadsByCustomField,
   getLead,
@@ -89,6 +88,9 @@ function explicitSourceDispatchLeadId(lead: AmoLead): number | null {
 }
 
 async function getSkladLead(id: number): Promise<AmoLead> {
+  if (getWarehouseRepository().hiddenLeadIds().has(id)) {
+    throw new WarehouseValidationError("Заявка удалена из кабинета склада.");
+  }
   const lead = await getLead(id);
   const pipelineId = Number(requireId(env.pipelines.skladId, "AMOCRM_SKLAD_PIPELINE_ID"));
   if (lead.pipeline_id !== pipelineId) {
@@ -367,7 +369,9 @@ export async function countRequests(scope: RequestListScope): Promise<number> {
       scope === "done" ? "AMOCRM_SKLAD_DONE_STATUS_ID" : "AMOCRM_SKLAD_NEW_STATUS_ID",
     ),
   );
-  return countLeadsByPipeline(pipelineId, statusId);
+  const leads = await listLeadsByPipeline(pipelineId, statusId);
+  const hidden = getWarehouseRepository().hiddenLeadIds();
+  return new Set(leads.filter(lead => !hidden.has(lead.id)).map(lead => lead.id)).size;
 }
 
 export async function getRequest(

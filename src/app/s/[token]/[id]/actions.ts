@@ -140,8 +140,10 @@ export async function saveRequestAction(
 
   revalidatePath(`/s/${parsed.data.token}/${parsed.data.id}`);
   revalidatePath(`/s/${parsed.data.token}`);
+  revalidatePath("/cabinet");
+  revalidatePath(`/cabinet/${parsed.data.id}`);
   if (parsed.data.action === "complete") {
-    redirect(`/s/${parsed.data.token}?completed=1`);
+    redirect(formData.get("cabinet") === "1" ? "/cabinet?completed=1" : `/s/${parsed.data.token}?completed=1`);
   }
   return {
     ok: true,

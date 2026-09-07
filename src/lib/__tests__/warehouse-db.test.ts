@@ -86,6 +86,25 @@ describe("WarehouseRepository", () => {
     expect(repository.hasDispatchLead(201)).toBe(false);
   });
 
+  it("removes locally, records the actor and blocks stale saves", () => {
+    const draft = repository.ensureDraft(100, 200, initialMaterials, "Тест");
+    repository.removeFromWarehouse(100, draft.version, "Администратор");
+    expect(repository.hiddenLeadIds().has(100)).toBe(true);
+    expect(repository.getDraft(100).items).toHaveLength(2);
+    expect(repository.db.prepare("SELECT actor FROM warehouse_request_audit WHERE action = 'removed_from_warehouse'").get()).toEqual({ actor: "Администратор" });
+    expect(() => repository.saveDraft(100, draft.version, input(draft.version), "Тест", "draft")).toThrow("удалена");
+    repository.removeFromWarehouse(100, draft.version, "Администратор");
+  });
+
+  it("does not remove a changed or transmitting draft", () => {
+    const draft = repository.ensureDraft(100, 200, initialMaterials, "Тест");
+    expect(() => repository.removeFromWarehouse(100, draft.version + 1, "Тест")).toThrow(WarehouseConflictError);
+    repository.saveDraft(100, draft.version, input(draft.version), "Тест", "completing");
+    const current = repository.getDraft(100);
+    expect(() => repository.removeFromWarehouse(100, current.version, "Тест")).toThrow("передачи");
+    expect(repository.hiddenLeadIds().size).toBe(0);
+  });
+
   it("upgrades an existing version 1 database through every migration", () => {
     repository.db.exec("DROP TABLE warehouse_request_files");
     repository.db.exec("DROP TABLE warehouse_hidden_requests");

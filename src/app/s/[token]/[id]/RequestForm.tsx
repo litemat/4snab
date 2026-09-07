@@ -11,6 +11,7 @@ import {
 import { saveRequestAction, type SaveState } from "./actions";
 
 interface Props {
+  cabinet?: boolean;
   token: string;
   id: number;
   draft: WarehouseDraft;
@@ -77,7 +78,7 @@ function ActionButton({
   );
 }
 
-export function RequestForm({ token, id, draft, isDone, blockedReason }: Props) {
+export function RequestForm({ token, id, draft, isDone, blockedReason, cabinet = false }: Props) {
   const [state, formAction] = useActionState<SaveState, FormData>(saveRequestAction, {
     ok: false,
   });
@@ -139,6 +140,7 @@ export function RequestForm({ token, id, draft, isDone, blockedReason }: Props) 
 
   return (
     <form action={formAction} onSubmit={syncSubmittedItems} className="space-y-5">
+      <input type="hidden" name="cabinet" value={cabinet ? "1" : "0"} />
       <input type="hidden" name="token" value={token} />
       <input type="hidden" name="id" value={id} />
       <input type="hidden" name="version" value={draft.version} />

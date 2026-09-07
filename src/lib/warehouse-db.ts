@@ -326,6 +326,19 @@ export class WarehouseRepository {
     })();
   }
 
+  removeFromWarehouse(id: number, expectedVersion: number, actor: string): void {
+    this.db.transaction(() => {
+      if (this.hiddenLeadIds().has(id)) return;
+      const request = this.requestRow(id);
+      if (request?.status === "completing") {
+        throw new WarehouseValidationError("Дождитесь завершения передачи диспетчеру, затем повторите удаление.");
+      }
+      if ((request?.version ?? 0) !== expectedVersion) throw new WarehouseConflictError();
+      this.hideRequests([id], actor);
+      if (request) this.audit(id, request.version, actor, "removed_from_warehouse", { scope: "warehouse-only" });
+    })();
+  }
+
   private requestRow(warehouseLeadId: number): RequestRow | undefined {
     return this.db
       .prepare("SELECT * FROM warehouse_requests WHERE warehouse_lead_id = ?")
@@ -517,6 +530,7 @@ export class WarehouseRepository {
     this.db.transaction(() => {
       const request = this.requestRow(warehouseLeadId);
       if (!request) throw new Error("Локальный черновик не найден");
+      if (this.hiddenLeadIds().has(warehouseLeadId)) throw new WarehouseValidationError("Заявка удалена из кабинета склада.");
       if (request.status === "completed") throw new WarehouseLockedError();
       if (request.status === "completing") {
         if (nextStatus === "completing") return;

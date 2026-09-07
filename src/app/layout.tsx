@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Интерфейс зав. склада",
-  description: "Заявки на отгрузку, синхронизация с amoCRM",
+  title: "4СНАБ — цифровое рабочее место склада",
+  description: "Заявки, материалы и накладные в одном окне. От задания диспетчера до готовой отгрузки.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
